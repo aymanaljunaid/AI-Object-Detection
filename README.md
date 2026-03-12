@@ -32,8 +32,8 @@ Real-time object detection running **entirely in your browser** — no server, n
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/aymanaljunaid/Detector.git
-cd Detector
+git clone https://github.com/aymanaljunaid/ai-object-detection.git
+cd ai-object-detection
 
 # 2. Install dependencies
 npm install
@@ -230,4 +230,4 @@ Click the **JSON** or **CSV** button in the Detection Settings panel to download
 
 ## 📄 License
 
-MIT
+This project is licensed under the [MIT License](LICENSE).
