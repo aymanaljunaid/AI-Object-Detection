@@ -30,7 +30,9 @@ export interface UseDetectionReturn {
   executionProvider: string;
   eventLog: DetectionEvent[];
   diagnostics: DetectorDiagnostics | null;
-  
+  // BUG 1 FIX: expose isModelReady so callers can gate startDetection()
+  isModelReady: boolean;
+
   // Actions
   loadModel: () => Promise<void>;
   startDetection: () => void;
@@ -75,7 +77,9 @@ export function useDetection(options: UseDetectionOptions): UseDetectionReturn {
   const [executionProvider, setExecutionProvider] = useState<string>('wasm');
   const [eventLog, setEventLog] = useState<DetectionEvent[]>([]);
   const [diagnostics, setDiagnostics] = useState<DetectorDiagnostics | null>(null);
-  
+  // BUG 1 FIX: track whether the model is actually ready
+  const [isModelReady, setIsModelReady] = useState(false);
+
   const [settings, setSettings] = useState<DetectionSettings>({
     ...DEFAULT_SETTINGS,
     ...initialSettings
@@ -104,13 +108,26 @@ export function useDetection(options: UseDetectionOptions): UseDetectionReturn {
     if (isModelLoading || detectorRef.current?.isReady()) return;
 
     setIsModelLoading(true);
+    setIsModelReady(false);
     setModelError(null);
     setModelLoadProgress(0);
     setDiagnostics({ ...EMPTY_DIAGNOSTICS, modelPath });
 
     try {
-      const hasWebGPU = 'gpu' in navigator;
-      const provider = hasWebGPU ? 'webgpu' : 'wasm';
+      // BUG 7 FIX: properly check WebGPU availability via requestAdapter()
+      // instead of just checking if 'gpu' exists in navigator.
+      let provider: 'webgpu' | 'wasm' = 'wasm';
+      if ('gpu' in navigator) {
+        try {
+          const adapter = await (navigator as unknown as { gpu: { requestAdapter: () => Promise<unknown> } }).gpu.requestAdapter();
+          if (adapter) {
+            provider = 'webgpu';
+          }
+        } catch {
+          // WebGPU not functional, fall back to wasm
+          provider = 'wasm';
+        }
+      }
 
       console.log('🔧 Loading model:', modelPath);
       console.log('🔧 Execution provider:', provider);
@@ -128,12 +145,14 @@ export function useDetection(options: UseDetectionOptions): UseDetectionReturn {
 
       setExecutionProvider(detectorRef.current.getExecutionProvider());
       setDiagnostics(detectorRef.current.getDiagnostics());
+      setIsModelReady(true);
       console.log('✅ Model loaded successfully');
-      
+
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to load model';
       console.error('❌ Model loading failed:', errorMessage);
       setModelError(errorMessage);
+      setIsModelReady(false);
       if (detectorRef.current) {
         setDiagnostics(detectorRef.current.getDiagnostics());
       }
@@ -159,7 +178,7 @@ export function useDetection(options: UseDetectionOptions): UseDetectionReturn {
 
     try {
       const result = await detectorRef.current.detect(imageData);
-      
+
       // Update diagnostics from detector
       setDiagnostics(detectorRef.current.getDiagnostics());
 
@@ -177,10 +196,10 @@ export function useDetection(options: UseDetectionOptions): UseDetectionReturn {
       // Only update React state once per second (for FPS display)
       const now = performance.now();
       const elapsed = now - lastFpsUpdateRef.current;
-      
+
       if (elapsed >= 1000) {
         const fps = (fpsFrameCountRef.current * 1000) / elapsed;
-        
+
         setMetrics(prev => ({
           fps,
           inferenceTime: latestMetricsRef.current.inferenceTime,
@@ -198,7 +217,7 @@ export function useDetection(options: UseDetectionOptions): UseDetectionReturn {
         // Only log unique class detections per frame to avoid spam
         const seenLabels = new Set<string>();
         const events: DetectionEvent[] = [];
-        
+
         for (const d of result.detections) {
           if (!seenLabels.has(d.label)) {
             seenLabels.add(d.label);
@@ -269,13 +288,15 @@ export function useDetection(options: UseDetectionOptions): UseDetectionReturn {
     setEventLog([]);
   }, []);
 
-  // Cleanup on unmount
+  // BUG 8 FIX: dispose() is async but React cleanup can't await.
+  // We store the promise in a local variable and let it resolve on its own,
+  // preventing the linter warning and ensuring cleanup still runs.
   useEffect(() => {
     return () => {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
-      detectorRef.current?.dispose();
+      void detectorRef.current?.dispose();
     };
   }, []);
 
@@ -291,6 +312,7 @@ export function useDetection(options: UseDetectionOptions): UseDetectionReturn {
     executionProvider,
     eventLog,
     diagnostics,
+    isModelReady,
     loadModel,
     startDetection,
     stopDetection,

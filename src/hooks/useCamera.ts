@@ -46,22 +46,20 @@ export function useCamera(options: UseCameraOptions = {}): UseCameraReturn {
   const [error, setError] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<CameraCapabilities[]>([]);
 
-  // Enumerate available cameras
+  // BUG 3 FIX: enumerate cameras using the already-obtained stream permission,
+  // do NOT call getUserMedia again (that would open a second leaked stream).
   const enumerateCameras = useCallback(async () => {
     try {
-      // Request permission first
-      await navigator.mediaDevices.getUserMedia({ video: true });
-      
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videoDevices = devices.filter(d => d.kind === 'videoinput');
-      
+
       const cameraCaps: CameraCapabilities[] = videoDevices.map(device => ({
         deviceId: device.deviceId,
         label: device.label || `Camera ${device.deviceId.slice(0, 8)}`,
         resolution: { width, height },
         frameRate
       }));
-      
+
       setCapabilities(cameraCaps);
       return cameraCaps;
     } catch (err) {
@@ -104,7 +102,7 @@ export function useCamera(options: UseCameraOptions = {}): UseCameraReturn {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
         setIsStreaming(true);
-        
+
         // Update canvas size to match video
         if (canvasRef.current) {
           canvasRef.current.width = videoRef.current.videoWidth;
@@ -112,7 +110,8 @@ export function useCamera(options: UseCameraOptions = {}): UseCameraReturn {
         }
       }
 
-      // Enumerate cameras after getting permission
+      // BUG 3 FIX: enumerate cameras AFTER getting stream (permission already granted),
+      // no second getUserMedia call needed inside enumerateCameras.
       await enumerateCameras();
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to access camera';
@@ -135,25 +134,40 @@ export function useCamera(options: UseCameraOptions = {}): UseCameraReturn {
     setIsStreaming(false);
   }, []);
 
-  // Switch to a different camera
+  // BUG 2 FIX: switchCamera now has full try/catch with error state
   const switchCamera = useCallback(async (newDeviceId: string) => {
     stopCamera();
-    
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        width: { ideal: width },
-        height: { ideal: height },
-        frameRate: { ideal: frameRate },
-        deviceId: { exact: newDeviceId }
-      },
-      audio: false
-    });
+    setIsLoading(true);
+    setError(null);
 
-    streamRef.current = stream;
-    if (videoRef.current) {
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play();
-      setIsStreaming(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: width },
+          height: { ideal: height },
+          frameRate: { ideal: frameRate },
+          deviceId: { exact: newDeviceId }
+        },
+        audio: false
+      });
+
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+        setIsStreaming(true);
+
+        if (canvasRef.current) {
+          canvasRef.current.width = videoRef.current.videoWidth;
+          canvasRef.current.height = videoRef.current.videoHeight;
+        }
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to switch camera';
+      setError(errorMessage);
+      console.error('Switch camera error:', err);
+    } finally {
+      setIsLoading(false);
     }
   }, [stopCamera, width, height, frameRate]);
 
@@ -169,7 +183,7 @@ export function useCamera(options: UseCameraOptions = {}): UseCameraReturn {
 
     // Draw video frame to canvas
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    
+
     // Get image data
     return ctx.getImageData(0, 0, canvas.width, canvas.height);
   }, [isStreaming]);

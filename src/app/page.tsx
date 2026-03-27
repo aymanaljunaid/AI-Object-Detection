@@ -32,13 +32,15 @@ import { useDetection } from '@/hooks/useDetection';
 import { DetectionCanvas } from '@/components/DetectionCanvas';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { COCO_CLASSES, getClassColor } from '@/lib/detection/types';
-import { exportEvents, getSummary, clearEvents, saveEvents } from '@/lib/detection/eventLogger';
+import { exportEvents, getSummary, clearEvents, saveNewEvents } from '@/lib/detection/eventLogger';
 
 const MODEL_PATH = '/models/yolov8n.onnx';
 
 export default function Home() {
   const videoContainerRef = useRef<HTMLDivElement>(null);
   const detectionLoopRef = useRef<number | null>(null);
+  // BUG 4 FIX: track whether the detection loop is already running
+  const loopRunningRef = useRef(false);
 
   const {
     videoRef,
@@ -64,6 +66,7 @@ export default function Home() {
     executionProvider,
     eventLog,
     diagnostics,
+    isModelReady,
     loadModel,
     startDetection,
     stopDetection,
@@ -113,8 +116,15 @@ export default function Home() {
   }, [isDetecting, isStreaming, captureFrame, detectFrame]);
 
   const runDetectionLoop = useCallback(() => {
+    // BUG 4 FIX: bail out if a loop is already running
+    if (loopRunningRef.current) return;
+    loopRunningRef.current = true;
+
     const loop = async () => {
-      if (!isDetectingRef.current || !isStreamingRef.current) return;
+      if (!isDetectingRef.current || !isStreamingRef.current) {
+        loopRunningRef.current = false;
+        return;
+      }
       const frame = captureFrameRef.current();
       if (frame) {
         await detectFrameRef.current(frame);
@@ -133,6 +143,7 @@ export default function Home() {
         cancelAnimationFrame(detectionLoopRef.current);
         detectionLoopRef.current = null;
       }
+      loopRunningRef.current = false;
     };
   }, [isDetecting, isStreaming, runDetectionLoop]);
 
@@ -143,15 +154,27 @@ export default function Home() {
     return () => clearInterval(interval);
   }, []);
 
+  // BUG 6 FIX: only save newly added events, not the full eventLog on every change
+  const prevEventLogLengthRef = useRef(0);
   useEffect(() => {
-    if (eventLog.length > 0) saveEvents(eventLog);
+    const newEvents = eventLog.slice(prevEventLogLengthRef.current);
+    if (newEvents.length > 0) {
+      saveNewEvents(newEvents);
+      prevEventLogLengthRef.current = eventLog.length;
+    }
   }, [eventLog]);
 
+  // BUG 1 FIX: only call startDetection() after model is confirmed ready
   const handleStart = useCallback(async () => {
-    if (!isModelLoading && !isDetecting) await loadModel();
+    if (!isModelReady) {
+      await loadModel();
+    }
     if (!isStreaming) await startCamera();
-    startDetection();
-  }, [isModelLoading, isDetecting, isStreaming, loadModel, startCamera, startDetection]);
+    // Guard: only start detection if model loaded successfully
+    if (isModelReady) {
+      startDetection();
+    }
+  }, [isModelReady, isStreaming, loadModel, startCamera, startDetection]);
 
   const handleStop = useCallback(() => {
     stopDetection();
@@ -173,6 +196,7 @@ export default function Home() {
     clearEventLog();
     clearEvents();
     setStats(null);
+    prevEventLogLengthRef.current = 0;
   }, [clearEventLog]);
 
   const error = cameraError || modelError;
@@ -184,15 +208,14 @@ export default function Home() {
         <div className="container mx-auto px-4 max-w-7xl h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="h-9 w-9 relative shrink-0">
-              {/* White logo for dark mode */}
+              {/* BUG 5 FIX: white logo shown in dark mode, black logo shown in light mode */}
               <img
-                src="/logos/object-detection-black.png"
+                src="/logos/object-detection-white.png"
                 alt="Logo"
                 className="h-9 w-9 hidden dark:block"
               />
-              {/* Black logo for light mode */}
               <img
-                src="/logos/object-detection-white.png"
+                src="/logos/object-detection-black.png"
                 alt="Logo"
                 className="h-9 w-9 block dark:hidden"
               />

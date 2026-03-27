@@ -13,18 +13,31 @@ const MAX_EVENTS = 1000; // Maximum events to store
 const MAX_SESSIONS = 50; // Maximum sessions to store
 
 /**
- * Save detection events to localStorage
+ * BUG 6 FIX: saveNewEvents only appends truly new events to localStorage.
+ * The old saveEvents(eventLog) was called with the full eventLog on every change,
+ * causing every event to be re-merged and duplicated in storage.
+ */
+export function saveNewEvents(newEvents: DetectionEvent[]): void {
+  if (typeof window === 'undefined' || newEvents.length === 0) return;
+
+  try {
+    const existing = getEvents();
+    const merged = [...existing, ...newEvents].slice(-MAX_EVENTS);
+    localStorage.setItem(EVENTS_KEY, JSON.stringify(merged));
+  } catch (error) {
+    console.error('Failed to save events:', error);
+  }
+}
+
+/**
+ * @deprecated Use saveNewEvents() to avoid event duplication.
+ * Kept for backwards compatibility only.
  */
 export function saveEvents(events: DetectionEvent[]): void {
   if (typeof window === 'undefined') return;
 
   try {
-    // Get existing events
-    const existing = getEvents();
-    
-    // Merge and limit
-    const merged = [...existing, ...events].slice(-MAX_EVENTS);
-    
+    const merged = [...events].slice(-MAX_EVENTS);
     localStorage.setItem(EVENTS_KEY, JSON.stringify(merged));
   } catch (error) {
     console.error('Failed to save events:', error);
@@ -67,7 +80,7 @@ export function getFilteredEvents(options: {
   }
 
   if (options.minConfidence !== undefined) {
-    events = events.filter(e => e.confidence >= options.minConfidence);
+    events = events.filter(e => e.confidence >= options.minConfidence!);
   }
 
   if (options.startTime !== undefined) {
@@ -135,10 +148,10 @@ function saveSession(session: DetectionSession): void {
   try {
     const sessions = getSessions();
     sessions.push(session);
-    
+
     // Keep only the most recent sessions
     const trimmed = sessions.slice(-MAX_SESSIONS);
-    
+
     localStorage.setItem(SESSIONS_KEY, JSON.stringify(trimmed));
   } catch (error) {
     console.error('Failed to save session:', error);
@@ -180,7 +193,7 @@ export function getSessionStats(sessionId: string): {
   if (!session) return null;
 
   const events = getFilteredEvents({ sessionId });
-  
+
   if (events.length === 0) {
     return {
       totalDetections: 0,
@@ -192,7 +205,7 @@ export function getSessionStats(sessionId: string): {
 
   const uniqueClasses = [...new Set(events.map(e => e.label))];
   const avgConfidence = events.reduce((sum, e) => sum + e.confidence, 0) / events.length;
-  
+
   const duration = ((session.endTime || Date.now()) - session.startTime) / 1000;
   const detectionRate = events.length / duration;
 
@@ -205,7 +218,7 @@ export function getSessionStats(sessionId: string): {
 }
 
 /**
- * Export events as JSON
+ * Export events as JSON or CSV
  */
 export function exportEvents(format: 'json' | 'csv' = 'json'): string {
   const events = getEvents();
@@ -246,7 +259,7 @@ export function getSummary(): {
   const sessions = getSessions();
 
   const classCounts: Record<string, number> = {};
-  
+
   for (const event of events) {
     classCounts[event.label] = (classCounts[event.label] || 0) + 1;
   }
